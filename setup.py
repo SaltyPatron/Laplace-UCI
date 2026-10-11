@@ -133,9 +133,19 @@ def main():
     else:
         raise RuntimeError('Installed UCI listener failed its health request.')
     write(state / 'installation.json', json.dumps({'revision': revision, 'service': service, 'listener': connector['listen'], 'profile_searches': 'not tested by installation'}), 0o640)
+    entrypoint = Path(c['entrypoint'])
+    if not entrypoint.is_absolute() or (entrypoint.exists() and not entrypoint.is_symlink()):
+        raise ValueError('CLI entrypoint must be an absolute path that does not replace an existing regular file.')
+    if entrypoint.is_symlink() and install.resolve() not in entrypoint.resolve().parents:
+        raise ValueError('CLI entrypoint belongs to another installation.')
+    candidate = entrypoint.with_name(entrypoint.name + '.new')
+    if candidate.exists() or candidate.is_symlink():
+        raise ValueError('CLI publication is already staged at ' + str(candidate))
+    candidate.symlink_to(release / 'laplace-uci-connect')
+    os.replace(candidate, entrypoint)
     if enrollment_path.resolve() != (configuration / 'enrollment.json').resolve():
         enrollment_path.unlink()
-    print('Installed ' + service + '; OpenBao rendered credentials and the listener answered. Run verify for each engine profile.')
+    print('Installed ' + service + ' and ' + str(entrypoint) + '; OpenBao rendered credentials and the listener answered. Run verify for each engine profile.')
 
 
 if __name__ == '__main__':

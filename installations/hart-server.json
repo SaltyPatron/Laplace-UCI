@@ -7,6 +7,7 @@
   "state_directory": "/var/lib/laplace-mono-uci",
   "configuration_directory": "/etc/laplace-mono/uci",
   "publish_directory": "/repos/work/uci-verification/connector",
+  "entrypoint": "/usr/local/bin/laplace-uci-connect",
   "secret_files": { "engine_env": "engine.env", "server_token": "server.token" },
   "connector": {
     "version": 1,

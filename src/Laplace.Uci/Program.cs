@@ -10,10 +10,14 @@ try
     var command = args.FirstOrDefault() ?? "help";
     if (command == "help")
     {
-        Console.WriteLine("laplace-uci-connect catalog|connect|verify|serve --configuration FILE [--profile NAME]");
+        Console.WriteLine("laplace-uci-connect catalog|connect|verify|serve [--configuration FILE] [--profile NAME]");
+        Console.WriteLine("Configuration: --configuration, LAPLACE_UCI_CONFIG, then the user's Laplace/uci/configuration.json application-config file.");
         return 0;
     }
-    var config = ConnectorConfiguration.Read(Value("--configuration"));
+    var configurationPath = args.Contains("--configuration") ? Value("--configuration")
+        : Environment.GetEnvironmentVariable("LAPLACE_UCI_CONFIG")
+          ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Laplace", "uci", "configuration.json");
+    var config = ConnectorConfiguration.Read(configurationPath);
     using var lifetime = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) => { e.Cancel = true; lifetime.Cancel(); };
     if (command == "catalog")
@@ -44,7 +48,7 @@ try
                 while (await engine.ReceiveAsync(lifetime.Token) is { } line)
                 {
                     if (line.StartsWith("info string ")) Console.Error.WriteLine(line);
-                    if (line.StartsWith("id ") || line.StartsWith("bestmove ") || line.StartsWith("info string providers"))
+                    if (line.StartsWith("id ") || line.StartsWith("bestmove ") || line.StartsWith("info string providers") || line.StartsWith("info string laplace knowledge "))
                     {
                         if (lines.Count == 256) lines.RemoveAt(0);
                         lines.Add(line);
