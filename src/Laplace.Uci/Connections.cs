@@ -43,8 +43,8 @@ public static class Connections
                 if (line.Trim() == "quit") return;
             }
         }
-        var a = Pump(left, right);
-        var b = Pump(right, left);
+        var a = Task.Run(() => Pump(left, right), lifetime.Token);
+        var b = Task.Run(() => Pump(right, left), lifetime.Token);
         var first = await Task.WhenAny(a, b);
         lifetime.Cancel();
         try { await first; }
@@ -58,6 +58,9 @@ public static class Connections
 
 public sealed class TextConnection(TextReader input, TextWriter output, int maxLineBytes) : IUciConnection
 {
+    private readonly char[] buffer = new char[4096];
+    private int offset;
+    private int length;
     public async ValueTask SendAsync(string line, CancellationToken ct)
     {
         Validate(line, maxLineBytes);
@@ -68,14 +71,26 @@ public sealed class TextConnection(TextReader input, TextWriter output, int maxL
     {
         // ReadLineAsync could allocate arbitrarily before checking a malicious peer's limit.
         var line = new StringBuilder();
-        var buffer = new char[1];
-        while (await input.ReadAsync(buffer.AsMemory(), ct) != 0)
+        while (true)
         {
-            if (buffer[0] == '\n') return line.ToString().TrimEnd('\r');
-            line.Append(buffer[0]);
+            if (offset == length)
+            {
+                length = await input.ReadAsync(buffer.AsMemory(), ct).AsTask().WaitAsync(ct);
+                offset = 0;
+                if (length == 0) return line.Length == 0 ? null : Complete(line);
+            }
+            int start = offset;
+            while (offset < length && buffer[offset] != '\n') offset++;
+            line.Append(buffer, start, offset - start);
             if (line.Length > maxLineBytes) throw new InvalidDataException("UCI line exceeds configured limit.");
+            if (offset < length) { offset++; return Complete(line); }
         }
-        return line.Length == 0 ? null : line.ToString();
+    }
+    private string Complete(StringBuilder line)
+    {
+        var value = line.ToString().TrimEnd('\r');
+        Validate(value, maxLineBytes);
+        return value;
     }
     public static void Validate(string line, int limit)
     {

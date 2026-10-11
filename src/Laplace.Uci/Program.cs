@@ -30,7 +30,11 @@ try
         var profile = config.Get(id);
         await using var engine = await Connections.OpenAsync(profile, config.MaxLineBytes, lifetime.Token);
         if (command == "connect")
-            await Connections.RelayAsync(new TextConnection(Console.In, Console.Out, config.MaxLineBytes), engine, lifetime.Token);
+        {
+            using var input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false, true));
+            using var output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+            await Connections.RelayAsync(new TextConnection(input, output, config.MaxLineBytes), engine, lifetime.Token);
+        }
         else
         {
             lifetime.CancelAfter(TimeSpan.FromSeconds(120));
@@ -39,7 +43,12 @@ try
             {
                 while (await engine.ReceiveAsync(lifetime.Token) is { } line)
                 {
-                    if (line.StartsWith("id ") || line.StartsWith("bestmove ")) lines.Add(line);
+                    if (line.StartsWith("info string ")) Console.Error.WriteLine(line);
+                    if (line.StartsWith("id ") || line.StartsWith("bestmove ") || line.StartsWith("info string providers"))
+                    {
+                        if (lines.Count == 256) lines.RemoveAt(0);
+                        lines.Add(line);
+                    }
                     if (line == prefix || line.StartsWith(prefix + " ")) return;
                 }
                 throw new IOException($"Engine closed before {prefix}.");
