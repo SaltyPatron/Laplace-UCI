@@ -17,8 +17,6 @@ jobs:
           - os: windows-latest
             runtime: win-x64
     runs-on: ${{ matrix.os }}
-    env:
-      LAPLACE_UCI_BUILD_ROOT: ${{ runner.temp }}/uci-build
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
@@ -34,6 +32,8 @@ jobs:
         if: runner.os == 'Linux'
         run: python3 -m py_compile setup.py
       - name: Publish
+        env:
+          LAPLACE_UCI_BUILD_ROOT: ${{ runner.temp }}/uci-build
         run: dotnet publish src/Laplace.Uci/Laplace.Uci.csproj -c Release -r ${{ matrix.runtime }} --self-contained false -o artifacts/connector
       - name: Package installation inputs
         shell: pwsh
