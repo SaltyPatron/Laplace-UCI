@@ -73,3 +73,27 @@ The source enrollment is consumed; the installed root-only enrollment supports r
 Configuration precedence is `--configuration`, `LAPLACE_UCI_CONFIG`, then the current
 user's application configuration directory under `Laplace/uci/configuration.json`.
 An installation's service configuration is separate from a human's client profiles.
+
+Windows HTTPS installation uses an elevated PowerShell 7 session:
+
+```powershell
+./setup-iis.ps1 -Installation <host.json> -Enrollment <private-enrollment.json>
+```
+
+The declaration supplies the site and hostname, installation directory, published
+connector and revision, installed engine, OpenBao executable/address, runtime and
+certificate KV paths, database trust certificate, allowed network clients and
+connector configuration. `-Plan` reads the declaration without changing the host.
+The ASP.NET Core 10 Hosting Bundle must already be installed. Setup enables IIS
+WebSockets, creates a dedicated application pool, installs a scoped OpenBao Agent
+service and checks the HTTPS listener. The application pool can read its runtime
+credentials but cannot read the enrollment or machine TLS private key.
+
+The certificate record contains `pfx_base64` and `password`; the runtime record
+contains `server_token` and `engine_env`. Certificate issuance/renewal belongs to
+the certificate producer. The agent imports changed certificates and updates the
+IIS binding. Repeating setup uses its retained administrator-only enrollment.
+Verify a real engine session after listener installation; health alone is insufficient.
+
+Hosting follows [IIS in-process hosting](https://learn.microsoft.com/aspnet/core/host-and-deploy/iis/in-process-hosting?view=aspnetcore-10.0)
+and [OpenBao Agent's Windows service support](https://openbao.org/docs/agent-and-proxy/agent/winsvc/).
