@@ -1,0 +1,30 @@
+{
+  "host": "hart-server",
+  "user": "laplace-mono-uci",
+  "service": "laplace-mono-uci",
+  "revision": "REPLACE_WITH_PUBLISHED_REVISION",
+  "install_directory": "/opt/laplace-uci/releases",
+  "state_directory": "/var/lib/laplace-mono-uci",
+  "configuration_directory": "/etc/laplace-mono/uci",
+  "publish_directory": "/repos/work/uci-verification/connector",
+  "secret_files": { "engine_env": "engine.env", "server_token": "server.token" },
+  "connector": {
+    "version": 1,
+    "listen": "http://127.0.0.1:5192",
+    "serverTokenFile": "/var/lib/laplace-mono-uci/secrets/server.token",
+    "maxSessions": 2,
+    "profiles": {
+      "mono-staging": {
+        "label": "Laplace monorepo on hart-server",
+        "implementation": "laplace-mono",
+        "environment": "staging",
+        "knowledge": "hart-server/laplace-mono",
+        "transport": "process",
+        "executable": "/opt/laplace/app/uci/laplace-uci",
+        "arguments": [ "uci", "--engine", "laplace" ],
+        "environmentFiles": [ "/opt/laplace/app/laplace-api.env", "/var/lib/laplace-mono-uci/secrets/engine.env" ],
+        "workingDirectory": "/var/lib/laplace-mono-uci"
+      }
+    }
+  }
+}

@@ -66,7 +66,7 @@ try
         return 0;
     }
     if (command != "serve") throw new ArgumentException("Unknown command.");
-    var expected = SHA256.HashData(Encoding.UTF8.GetBytes(ConnectorConfiguration.Token(config.ServerTokenFile)));
+    _ = ConnectorConfiguration.Token(config.ServerTokenFile);
     var uri = new Uri(config.Listen);
     if (!uri.IsLoopback) throw new InvalidDataException("Bind the connector behind the installation's authenticated HTTPS ingress on loopback.");
     var builder = WebApplication.CreateBuilder();
@@ -78,6 +78,7 @@ try
     app.Map("/uci/{profile}", async (HttpContext context, string profile) =>
     {
         var authorization = context.Request.Headers.Authorization.ToString();
+        var expected = SHA256.HashData(Encoding.UTF8.GetBytes(ConnectorConfiguration.Token(config.ServerTokenFile)));
         var actual = SHA256.HashData(Encoding.UTF8.GetBytes(authorization.StartsWith("Bearer ", StringComparison.Ordinal) ? authorization[7..] : ""));
         if (!CryptographicOperations.FixedTimeEquals(actual, expected)) { context.Response.StatusCode = 401; return; }
         if (!context.WebSockets.IsWebSocketRequest) { context.Response.StatusCode = 400; return; }
