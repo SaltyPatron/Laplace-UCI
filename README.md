@@ -59,6 +59,17 @@ Set `LAPLACE_UCI_BUILD_ROOT` to place intermediates outside the checkout. Admin 
 installs service identities, directory permissions, the private configuration and ingress.
 Normal connections and chess operations do not require administrator privileges.
 
-Protocol references: [Stockfish's UCI documentation](https://github.com/official-stockfish/Stockfish/wiki/UCI-%26-Commands)
+Protocol references: [Stockfish's UCI documentation](https://official-stockfish.github.io/docs/stockfish-wiki/UCI-&-Commands.html)
 and [ASP.NET Core WebSockets](https://learn.microsoft.com/aspnet/core/fundamentals/websockets?view=aspnetcore-10.0).
 
+
+Linux host installation uses `sudo python3 setup.py --installation <host.json> --enrollment <private-enrollment.json>`.
+The declared revision must match the published connector. Setup installs an unprivileged
+service, a scoped OpenBao Agent, private rendered credentials and declared nginx locations.
+It requires a fresh agent render on every setup run. The installer checks listener health;
+run `verify` for every engine profile before marking an environment usable.
+The source enrollment is consumed; the installed root-only enrollment supports reruns.
+
+Configuration precedence is `--configuration`, `LAPLACE_UCI_CONFIG`, then the current
+user's application configuration directory under `Laplace/uci/configuration.json`.
+An installation's service configuration is separate from a human's client profiles.

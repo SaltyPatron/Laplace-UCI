@@ -8,6 +8,7 @@
   "configuration_directory": "/etc/laplace-mono/uci",
   "publish_directory": "/repos/work/uci-verification/connector",
   "entrypoint": "/usr/local/bin/laplace-uci-connect",
+  "nginx_server_files": [ "/etc/nginx/sites-available/laplace", "/etc/nginx/sites-available/laplace-mono-browser" ],
   "secret_files": { "engine_env": "engine.env", "server_token": "server.token" },
   "connector": {
     "version": 1,

@@ -40,13 +40,26 @@ def write(path, value, mode=0o600, owner=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--installation', required=True)
-    parser.add_argument('--enrollment', required=True)
+    parser.add_argument('--installation')
+    parser.add_argument('--enrollment')
+    parser.add_argument('--render')
     args = parser.parse_args()
+    if args.render:
+        c = json.loads(Path(args.render).read_text())
+        state = Path(c['state_directory'])
+        record = json.loads((state / 'candidate.json').read_text())
+        for field, filename in c['secret_files'].items():
+            if Path(filename).name != filename or not isinstance(record.get(field), str) or not record[field]:
+                raise ValueError('Missing or invalid UCI credential field: ' + field)
+            write(state / 'secrets' / filename, record[field])
+        write(state / 'credential-receipt.json', json.dumps({'source': 'openbao-agent', 'rendered_at': time.time()}))
+        return
+    if not args.installation:
+        parser.error('--installation is required.')
     if os.geteuid() != 0:
         parser.error('Run this installation operation with sudo.')
     c = json.loads(Path(args.installation).read_text())
-    enrollment_path = Path(args.enrollment)
+    enrollment_path = Path(args.enrollment) if args.enrollment else Path(c['configuration_directory']) / 'enrollment.json'
     enrollment = json.loads(enrollment_path.read_text())
     if c['host'].lower() != socket.gethostname().lower().split('.')[0]:
         raise ValueError('Installation belongs to another host.')
@@ -88,6 +101,10 @@ def main():
         os.replace(temporary, release)
     connector = c['connector']
     config_path = configuration / 'connector.json'
+    write(configuration / 'enrollment.json', json.dumps(enrollment))
+    write(configuration / 'installation.json', json.dumps(c), 0o640)
+    os.chown(configuration / 'installation.json', 0, account.pw_gid)
+    write(configuration / 'setup.py', Path(__file__).read_text(), 0o644)
     write(config_path, json.dumps(connector, indent=2), 0o640)
     os.chown(config_path, 0, account.pw_gid)
     for name in ['role_id', 'secret_id']:
@@ -102,8 +119,9 @@ def main():
     for field, filename in c['secret_files'].items():
         if not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', field) or Path(filename).name != filename:
             raise ValueError('Secret templates must name a field and a file within the private secret directory.')
-        template = '{{ with secret "' + enrollment['record'] + '" }}{{ .Data.data.' + field + ' }}{{ end }}'
-        agent += 'template { contents = ' + j(template) + '\ndestination = ' + j(str(state / 'secrets' / filename)) + '\nperms = "0600"\nbackup = false\nerror_on_missing_key = true\n}\n'
+    template = '{{ with secret "' + enrollment['record'] + '" }}{{ .Data.data | toJSON }}{{ end }}'
+    agent += 'template { contents = ' + j(template) + '\ndestination = ' + j(str(state / 'candidate.json')) + '\nperms = "0600"\nbackup = false\nerror_on_missing_key = true\n'
+    agent += 'exec { command = ' + j(['/usr/bin/python3', str(configuration / 'setup.py'), '--render', str(configuration / 'installation.json')]) + '\ntimeout = "30s"\n}\n}\n'
     write(configuration / 'agent.hcl', agent, 0o640)
     os.chown(configuration / 'agent.hcl', 0, account.pw_gid)
     bao = shutil.which('bao')
@@ -114,9 +132,13 @@ def main():
     write(units / (service + '-credentials.service'), '[Unit]\nDescription=Scoped UCI OpenBao credentials\nAfter=network-online.target\nWants=network-online.target\n[Service]\n' + common + f'ExecStart={bao} agent -config={configuration}/agent.hcl\n[Install]\nWantedBy=multi-user.target\n', 0o644)
     write(units / (service + '.service'), f'[Unit]\nDescription=Configured Laplace UCI transport\nRequires={service}-credentials.service\nAfter={service}-credentials.service\n[Service]\n' + common + f'WorkingDirectory={state}\nExecStart={release}/laplace-uci-connect serve --configuration {config_path}\n[Install]\nWantedBy=multi-user.target\n', 0o644)
     run(['systemctl', 'daemon-reload'])
+    run(['systemctl', 'stop', service + '-credentials.service'])
+    (state / 'candidate.json').unlink(missing_ok=True)
+    before = time.time()
     run(['systemctl', 'enable', '--now', service + '-credentials.service'])
     for _ in range(60):
-        if all((state / 'secrets' / f).is_file() for f in c['secret_files'].values()):
+        receipt = state / 'credential-receipt.json'
+        if receipt.exists() and json.loads(receipt.read_text())['rendered_at'] >= before and all((state / 'secrets' / f).is_file() for f in c['secret_files'].values()):
             break
         time.sleep(1)
     else:
@@ -132,6 +154,34 @@ def main():
             time.sleep(.5)
     else:
         raise RuntimeError('Installed UCI listener failed its health request.')
+    if c.get('nginx_server_files'):
+        snippet = Path('/etc/nginx/laplace-mono/uci.location.conf')
+        snippet.parent.mkdir(exist_ok=True, mode=0o755)
+        previous = {Path(p): Path(p).read_bytes() for p in c['nginx_server_files']}
+        old_snippet = snippet.read_bytes() if snippet.exists() else None
+        try:
+            upstream = connector['listen']
+            if not re.fullmatch(r'http://127\.0\.0\.1:[0-9]+', upstream):
+                raise ValueError('nginx requires an explicit loopback UCI listener.')
+            write(snippet, f'location /uci/ {{\n    proxy_pass {upstream};\n    proxy_http_version 1.1;\n    proxy_set_header Upgrade $http_upgrade;\n    proxy_set_header Connection "upgrade";\n    proxy_buffering off;\n    proxy_read_timeout 3600s;\n}}\n', 0o644)
+            include = '    include /etc/nginx/laplace-mono/*.location.conf;'
+            for path, original in previous.items():
+                text = original.decode()
+                if include.strip() not in text:
+                    text, count = re.subn(r'(server_name[^;]+;)', r'\1\n' + include, text)
+                    if count != 1:
+                        raise ValueError('Expected one declared server in ' + str(path))
+                    write(path, text, 0o644)
+            run(['nginx', '-t'])
+            run(['systemctl', 'reload', 'nginx'])
+        except BaseException:
+            for path, original in previous.items():
+                path.write_bytes(original)
+            if old_snippet is None:
+                snippet.unlink(missing_ok=True)
+            else:
+                snippet.write_bytes(old_snippet)
+            raise
     write(state / 'installation.json', json.dumps({'revision': revision, 'service': service, 'listener': connector['listen'], 'profile_searches': 'not tested by installation'}), 0o640)
     entrypoint = Path(c['entrypoint'])
     if not entrypoint.is_absolute() or (entrypoint.exists() and not entrypoint.is_symlink()):
