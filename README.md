@@ -35,6 +35,8 @@ profile returns 404, capacity exhaustion 429 and missing/incorrect authorization
 
 See `configuration.example.json`. All paths are installation configuration. Executable
 arguments are arrays. Environment files are parsed as data; no shell expressions execute.
+The [configuration reference](configuration.md) indexes every connector/profile field,
+transport limit and host installation input.
 SSH uses existing host aliases, keys and strict host-key checking. SSH profiles should
 invoke a remote `connect` command whose process profile owns remote paths and credentials.
 WebSocket profiles require `wss://`; `ws://` is accepted only for loopback verification.
