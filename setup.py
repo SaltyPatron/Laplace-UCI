@@ -107,6 +107,11 @@ def main():
     write(configuration / 'setup.py', Path(__file__).read_text(), 0o644)
     write(config_path, json.dumps(connector, indent=2), 0o640)
     os.chown(config_path, 0, account.pw_gid)
+    for filename, content in c.get('public_files', {}).items():
+        if Path(filename).name != filename or not isinstance(content, str):
+            raise ValueError('Public supporting files must be text inside the configuration directory.')
+        write(configuration / filename, content, 0o640)
+        os.chown(configuration / filename, 0, account.pw_gid)
     for name in ['role_id', 'secret_id']:
         write(configuration / name, enrollment[name], 0o640)
         os.chown(configuration / name, 0, account.pw_gid)
