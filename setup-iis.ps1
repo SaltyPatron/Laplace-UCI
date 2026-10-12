@@ -73,6 +73,12 @@ if($c.engine_directory){
     }
 }
 foreach($p in @($c.publish,$c.engine,$c.bao)){if(-not(Test-Path -LiteralPath $p)){throw "Missing installation input: $p"}}
+foreach($path in $c.read_paths){
+    if(-not [IO.Path]::IsPathFullyQualified($path) -or -not(Test-Path -LiteralPath $path) -or
+        [IO.Path]::GetFullPath($path).TrimEnd('\') -eq [IO.Path]::GetPathRoot($path).TrimEnd('\')){
+        throw 'read_paths must identify existing public runtime files/directories, not volume roots.'
+    }
+}
 if($c.revision -notmatch '^[a-f0-9]{7,64}$'){throw 'Declare the published connector revision.'}
 foreach($p in @($root,$private,$state,$web)){[void](New-Item -ItemType Directory -Path $p -Force)}
 function Protect-Directory([string]$Path,[bool]$AllowPool,[bool]$Writable){
@@ -107,6 +113,12 @@ Protect-Directory $state $true $false
 $engineAcl=Get-Acl -LiteralPath $engineDirectory
 $engineAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(('IIS APPPOOL\'+$c.site),'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'))
 [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($engineDirectory),$engineAcl)
+foreach($path in $c.read_paths){
+    $acl=Get-Acl -LiteralPath $path
+    $inheritance=if(Test-Path -LiteralPath $path -PathType Container){'ContainerInherit,ObjectInherit'}else{'None'}
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(('IIS APPPOOL\'+$c.site),'ReadAndExecute',$inheritance,'None','Allow'))
+    Set-Acl -LiteralPath $path -AclObject $acl
+}
 $bao=Join-Path $private 'bao.exe'
 if(-not(Test-Path $bao) -or (Get-FileHash $bao).Hash -ne (Get-FileHash $c.bao).Hash){
     $existing=Get-Service ($c.site+'-credentials') -ErrorAction SilentlyContinue

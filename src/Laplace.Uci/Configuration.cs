@@ -36,6 +36,7 @@ public sealed record EngineProfile
     public PublishedEngineRelease? Release { get; init; }
     public string[] Arguments { get; init; } = [];
     public string[] EnvironmentFiles { get; init; } = [];
+    public Dictionary<string, string?> Variables { get; init; } = [];
     public string? WorkingDirectory { get; init; }
     public string? SshHost { get; init; }
     public string? Endpoint { get; init; }
@@ -83,12 +84,14 @@ public sealed record ConnectorConfiguration
                 else if (string.IsNullOrWhiteSpace(p.Executable)) throw new InvalidDataException($"Profile {id} needs an executable.");
                 if (p.Transport == "ssh" && (string.IsNullOrWhiteSpace(p.SshHost) || p.SshHost.StartsWith('-')
                     || p.SshHost.Any(char.IsWhiteSpace))) throw new InvalidDataException($"Profile {id} needs an SSH host alias.");
-                if (p.Transport == "ssh" && (p.EnvironmentFiles.Length != 0 || p.WorkingDirectory is not null))
+                if (p.Transport == "ssh" && (p.EnvironmentFiles.Length != 0 || p.Variables.Count != 0 || p.WorkingDirectory is not null))
                     throw new InvalidDataException($"Profile {id}: configure environment files and working directory on the remote process profile.");
+                if (p.Variables.Any(v => string.IsNullOrWhiteSpace(v.Key) || v.Key.Contains('=') || v.Key.Contains('\0') || (v.Value?.Contains('\0') ?? false)))
+                    throw new InvalidDataException($"Profile {id} has an invalid environment variable.");
             }
             else if (p.Transport == "websocket")
             {
-                if (p.Release is not null) throw new InvalidDataException($"Profile {id}: configure the release on the remote process profile.");
+                if (p.Release is not null || p.Variables.Count != 0) throw new InvalidDataException($"Profile {id}: configure the release and variables on the remote process profile.");
                 if (!Uri.TryCreate(p.Endpoint, UriKind.Absolute, out var uri)
                     || (uri.Scheme != "wss" && !(uri.Scheme == "ws" && uri.IsLoopback))
                     || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0
