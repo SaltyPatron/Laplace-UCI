@@ -28,6 +28,12 @@ function Test-InstalledEndpoint {
     }
 }
 if($Verify){Test-InstalledEndpoint;return}
+if(-not $Render){
+    $baoVersion=(& $c.bao version | Out-String).Trim()
+    if($LASTEXITCODE -or $baoVersion -notmatch '^OpenBao v(\d+\.\d+\.\d+)\s' -or [version]$Matches[1] -lt [version]'2.7.1'){
+        throw 'Declare an OpenBao 2.7.1-or-newer executable before installing the credential service.'
+    }
+}
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'IIS, machine certificate and service installation require an elevated setup operation.'}
 $root=$c.directory;$private=Join-Path $root 'agent';$state=Join-Path $root 'state';$web=Join-Path $root ('releases/'+$c.revision)
@@ -108,6 +114,7 @@ if(Test-Path (Join-Path $web 'laplace-uci-connect.exe')){
 }else{Copy-Item -Path (Join-Path $c.publish '*') -Destination $web -Recurse -Force}
 Write-Atomic (Join-Path $root 'connector.json') (Json $c.connector)
 Write-Atomic (Join-Path $root 'postgres-root.crt') $c.database_certificate
+$c.bao=$bao
 Write-Atomic (Join-Path $private 'installation.json') (Json $c)
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $private 'setup-iis.ps1') -Force
 $arguments=[Security.SecurityElement]::Escape('serve --configuration "'+(Join-Path $root 'connector.json')+'"')
