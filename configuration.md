@@ -90,6 +90,7 @@ declared record. `--render` is an agent operation, not a human launch command.
 | `directory`, `publish`, `revision` | Installation root and published connector input |
 | `engine` | Installed engine executable; its directory receives pool read/execute access |
 | `engine_directory` | Optional containing runtime directory receiving pool read/execute access, including future published releases and their selection file |
+| `read_paths` | Optional public configuration, tool and asset files/directories receiving pool read/execute access; never whole volumes or credential enrollments |
 | `bao` | Existing OpenBao executable copied into the protected service installation |
 | `address`, `runtime_record`, `certificate_record` | HTTPS OpenBao address and exact KV paths |
 | `database_certificate` | PEM trust certificate text |
