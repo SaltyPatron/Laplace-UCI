@@ -30,6 +30,7 @@ installation; they do not limit Laplace's knowledge representation.
 | `knowledge` | Required nonempty string | Human-readable knowledge target; not a credential or proof of database identity |
 | `transport` | Required: `process`, `ssh`, `websocket` | Connection mechanism |
 | `executable` | Required for process/SSH | Local engine executable, or installed remote connector executable |
+| `release` | Optional, process only; replaces `executable` | Published release selection: absolute `directory` and `selectionFile`, plus relative `executable` inside a release |
 | `arguments` | `[]` | Argument array; local invocation does not use a shell |
 | `environmentFiles` | `[]`; process only | Ordered `NAME=value` files; later assignments replace earlier ones |
 | `workingDirectory` | Inherited; process only | Engine working directory |
@@ -43,6 +44,13 @@ supply an executable or environment. Each accepted session owns one process;
 closing the connection disposes that process. WebSocket keepalive interval and
 timeout are 15 seconds. `verify` allows 120 seconds for handshake, readiness,
 new-game initialization and a real depth-one search.
+
+A `release` profile reads the publisher's `selectionFile` (`{"revision":"<64 hexadecimal characters>"}`)
+when each engine session starts, then launches `<directory>/<revision>/<executable>`.
+Existing sessions keep their original executable. A missing or invalid selection fails;
+another release or implementation is never substituted. This connects the application's
+ordinary versioned publication to the connector without overwriting a live engine or
+requiring a build directory on the consumer host.
 
 The monorepo's Lichess controller additionally checks actual PostgreSQL cluster and
 database identity reported by the engine, and requests `Refresh Knowledge` before
@@ -74,6 +82,7 @@ declared record. `--render` is an agent operation, not a human launch command.
 | `host`, `site`, `hostname` | Target Windows machine, dedicated IIS pool/site and HTTPS name |
 | `directory`, `publish`, `revision` | Installation root and published connector input |
 | `engine` | Installed engine executable; its directory receives pool read/execute access |
+| `engine_directory` | Optional containing runtime directory receiving pool read/execute access, including future published releases and their selection file |
 | `bao` | Existing OpenBao executable copied into the protected service installation |
 | `address`, `runtime_record`, `certificate_record` | HTTPS OpenBao address and exact KV paths |
 | `database_certificate` | PEM trust certificate text |

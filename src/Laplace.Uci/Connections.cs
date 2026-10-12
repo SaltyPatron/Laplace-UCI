@@ -107,7 +107,7 @@ public sealed class ProcessConnection : IUciConnection
     private readonly Task errors;
     public ProcessConnection(EngineProfile profile, int limit)
     {
-        var info = new ProcessStartInfo(profile.Transport == "ssh" ? "ssh" : profile.Executable!)
+        var info = new ProcessStartInfo(profile.Transport == "ssh" ? "ssh" : profile.ResolveExecutable())
         {
             UseShellExecute = false, RedirectStandardInput = true, RedirectStandardOutput = true,
             RedirectStandardError = true, CreateNoWindow = true

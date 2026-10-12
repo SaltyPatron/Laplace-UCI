@@ -3,6 +3,28 @@ using System.Text.Json.Serialization;
 
 namespace Laplace.Uci;
 
+public sealed record PublishedEngineRelease
+{
+    public required string Directory { get; init; }
+    public required string SelectionFile { get; init; }
+    public required string Executable { get; init; }
+
+    public string Resolve()
+    {
+        if (!Path.IsPathFullyQualified(Directory) || !Path.IsPathFullyQualified(SelectionFile)
+            || string.IsNullOrWhiteSpace(Executable) || Path.IsPathRooted(Executable)
+            || Executable.Split('/', '\\').Any(p => p is ".." or "." or ""))
+            throw new InvalidDataException("A published engine needs absolute release/selection paths and a relative executable path without traversal.");
+        using var selection = JsonDocument.Parse(File.ReadAllText(SelectionFile));
+        var revision = selection.RootElement.GetProperty("revision").GetString();
+        if (revision is null || revision.Length != 64 || revision.Any(c => !char.IsAsciiHexDigit(c)))
+            throw new InvalidDataException("Invalid selected engine release revision.");
+        string path = Path.Combine(Directory, revision, Executable);
+        if (!File.Exists(path)) throw new FileNotFoundException("The selected release has no declared engine executable.", path);
+        return Path.GetFullPath(path);
+    }
+}
+
 public sealed record EngineProfile
 {
     public required string Label { get; init; }
@@ -11,6 +33,7 @@ public sealed record EngineProfile
     public required string Knowledge { get; init; }
     public required string Transport { get; init; }
     public string? Executable { get; init; }
+    public PublishedEngineRelease? Release { get; init; }
     public string[] Arguments { get; init; } = [];
     public string[] EnvironmentFiles { get; init; } = [];
     public string? WorkingDirectory { get; init; }
@@ -18,6 +41,8 @@ public sealed record EngineProfile
     public string? Endpoint { get; init; }
     public string? TokenFile { get; init; }
     public int ConnectTimeoutSeconds { get; init; } = 15;
+    public string ResolveExecutable() => Release?.Resolve() ?? Executable
+        ?? throw new InvalidDataException("The engine profile has no executable.");
 }
 
 public sealed record ConnectorConfiguration
@@ -49,7 +74,13 @@ public sealed record ConnectorConfiguration
                 throw new InvalidDataException($"Profile {id} has missing identity or invalid timeout.");
             if (p.Transport is "process" or "ssh")
             {
-                if (string.IsNullOrWhiteSpace(p.Executable)) throw new InvalidDataException($"Profile {id} needs an executable.");
+                if (p.Release is not null)
+                {
+                    if (p.Transport != "process" || p.Executable is not null)
+                        throw new InvalidDataException($"Profile {id}: a published release replaces the local process executable.");
+                    _ = p.Release.Resolve();
+                }
+                else if (string.IsNullOrWhiteSpace(p.Executable)) throw new InvalidDataException($"Profile {id} needs an executable.");
                 if (p.Transport == "ssh" && (string.IsNullOrWhiteSpace(p.SshHost) || p.SshHost.StartsWith('-')
                     || p.SshHost.Any(char.IsWhiteSpace))) throw new InvalidDataException($"Profile {id} needs an SSH host alias.");
                 if (p.Transport == "ssh" && (p.EnvironmentFiles.Length != 0 || p.WorkingDirectory is not null))
@@ -57,6 +88,7 @@ public sealed record ConnectorConfiguration
             }
             else if (p.Transport == "websocket")
             {
+                if (p.Release is not null) throw new InvalidDataException($"Profile {id}: configure the release on the remote process profile.");
                 if (!Uri.TryCreate(p.Endpoint, UriKind.Absolute, out var uri)
                     || (uri.Scheme != "wss" && !(uri.Scheme == "ws" && uri.IsLoopback))
                     || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0
