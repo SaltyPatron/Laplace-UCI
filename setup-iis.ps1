@@ -63,6 +63,15 @@ if($Render){
     Write-Atomic (Join-Path $private 'render-receipt.json') (Json @{rendered_utc=[DateTime]::UtcNow.ToString('o');source='openbao-agent';certificate=$certificate.Thumbprint})
     return
 }
+$engineDirectory=Split-Path -Parent $c.engine
+if($c.engine_directory){
+    $engineDirectory=[IO.Path]::GetFullPath($c.engine_directory)
+    if(-not [IO.Path]::IsPathFullyQualified($c.engine_directory) -or -not(Test-Path -LiteralPath $engineDirectory -PathType Container) -or
+        $engineDirectory.TrimEnd('\') -eq [IO.Path]::GetPathRoot($engineDirectory).TrimEnd('\') -or
+        -not [IO.Path]::GetFullPath($c.engine).StartsWith($engineDirectory.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){
+        throw 'engine_directory must be an existing absolute runtime directory containing the declared engine, not a volume root.'
+    }
+}
 foreach($p in @($c.publish,$c.engine,$c.bao)){if(-not(Test-Path -LiteralPath $p)){throw "Missing installation input: $p"}}
 if($c.revision -notmatch '^[a-f0-9]{7,64}$'){throw 'Declare the published connector revision.'}
 foreach($p in @($root,$private,$state,$web)){[void](New-Item -ItemType Directory -Path $p -Force)}
@@ -95,7 +104,6 @@ try{
 Protect-Directory $root $true $false
 Protect-Directory $private $false $false
 Protect-Directory $state $true $false
-$engineDirectory=Split-Path -Parent $c.engine
 $engineAcl=Get-Acl -LiteralPath $engineDirectory
 $engineAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(('IIS APPPOOL\'+$c.site),'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'))
 [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($engineDirectory),$engineAcl)
