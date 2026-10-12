@@ -33,6 +33,7 @@ installation; they do not limit Laplace's knowledge representation.
 | `release` | Optional, process only; replaces `executable` | Published release selection: absolute `directory` and `selectionFile`, plus relative `executable` inside a release |
 | `arguments` | `[]` | Argument array; local invocation does not use a shell |
 | `environmentFiles` | `[]`; process only | Ordered `NAME=value` files; later assignments replace earlier ones |
+| `variables` | `{}`; process only | Explicit public environment overrides applied after the files; a JSON `null` removes an inherited or file-provided variable |
 | `workingDirectory` | Inherited; process only | Engine working directory |
 | `sshHost` | Required for SSH | Existing SSH host alias/address; batch mode and strict host-key checking are enabled |
 | `endpoint` | Required for WebSocket | `wss://` URL, or `ws://` on loopback only; credentials/query/fragment are rejected |
@@ -51,6 +52,12 @@ Existing sessions keep their original executable. A missing or invalid selection
 another release or implementation is never substituted. This connects the application's
 ordinary versioned publication to the connector without overwriting a live engine or
 requiring a build directory on the consumer host.
+
+For a self-contained application publication, explicitly remove obsolete build or
+perfcache overrides with `variables`, for example `"LAPLACE_PERFCACHE_BIN": null`,
+so the implementation discovers the files shipped in its selected release.
+Keep credentials in the private environment files. Public path declarations can
+set the implementation's shared configuration file through `variables`.
 
 The monorepo's Lichess controller additionally checks actual PostgreSQL cluster and
 database identity reported by the engine, and requests `Refresh Knowledge` before

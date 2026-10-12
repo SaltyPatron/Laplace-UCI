@@ -135,6 +135,11 @@ public sealed class ProcessConnection : IUciConnection
                 if (value.Length > 1 && value[0] is '\'' or '"' && value[^1] == value[0]) value = value[1..^1];
                 info.Environment[key] = value;
             }
+            foreach (var (key, value) in profile.Variables)
+            {
+                if (value is null) info.Environment.Remove(key);
+                else info.Environment[key] = value;
+            }
         }
         process = Process.Start(info) ?? throw new IOException("Engine process did not start.");
         text = new TextConnection(process.StandardOutput, process.StandardInput, limit);
