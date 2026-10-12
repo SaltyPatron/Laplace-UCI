@@ -97,5 +97,12 @@ the certificate producer. The agent imports changed certificates and updates the
 IIS binding. Repeating setup uses its retained administrator-only enrollment.
 Verify a real engine session after listener installation; health alone is insufficient.
 
+The final HTTPS check uses normal DNS and certificate validation, verifies the service
+identity in the response, and retries three times to allow DNS and IIS startup to settle.
+If it fails, the installed service remains in place and setup reports failure. Recheck
+the listener without reinstalling or elevating with
+`./setup-iis.ps1 -Installation <host.json> -Verify`, then run connector `verify` for the
+engine. `-Verify` changes no installation files or credentials.
+
 Hosting follows [IIS in-process hosting](https://learn.microsoft.com/aspnet/core/host-and-deploy/iis/in-process-hosting?view=aspnetcore-10.0)
 and [OpenBao Agent's Windows service support](https://openbao.org/docs/agent-and-proxy/agent/winsvc/).

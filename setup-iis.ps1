@@ -1,6 +1,6 @@
 #requires -Version 7
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Installation,[string]$Enrollment,[switch]$Render,[switch]$Plan)
+param([Parameter(Mandatory)][string]$Installation,[string]$Enrollment,[switch]$Render,[switch]$Plan,[switch]$Verify)
 $ErrorActionPreference='Stop'
 $c=Get-Content -LiteralPath $Installation -Raw | ConvertFrom-Json
 foreach($name in 'directory','publish','engine','bao') {
@@ -11,6 +11,23 @@ if($c.site -notmatch '^[a-zA-Z0-9-]+$' -or $c.hostname -notmatch '^[a-zA-Z0-9.-]
 if(-not $c.address.StartsWith('https://') -or $c.runtime_record -notmatch '^kv/data/[a-zA-Z0-9_/-]+$' -or $c.certificate_record -notmatch '^kv/data/[a-zA-Z0-9_/-]+$'){throw 'Declare HTTPS OpenBao and exact KV records.'}
 if([IO.Path]::GetFullPath($c.directory).TrimEnd('\') -eq [IO.Path]::GetPathRoot($c.directory).TrimEnd('\')){throw 'The installation directory must not be a volume root.'}
 if($Plan){$c|ConvertTo-Json -Depth 12;return}
+function Test-InstalledEndpoint {
+    $uri='https://'+$c.hostname+'/health/live'
+    for($attempt=1;$attempt -le 3;$attempt++){
+        try{
+            $response=Invoke-WebRequest $uri -ConnectionTimeoutSeconds 15 -OperationTimeoutSeconds 15 -MaximumRedirection 0
+            $health=$response.Content|ConvertFrom-Json
+            if($response.StatusCode -ne 200 -or $health.service -ne 'laplace-uci' -or $health.live -ne $true){throw 'The endpoint did not identify a live Laplace UCI service.'}
+            Write-Host "Verified $uri through normal DNS and certificate validation."
+            return
+        }catch{
+            if($attempt -eq 3){throw "HTTPS verification failed for $uri after three attempts: $($_.Exception.Message) Installed files are retained. After correcting DNS or service startup, rerun this script with -Installation and -Verify without elevation; use connector verify to check the engine."}
+            Write-Warning "HTTPS verification attempt $attempt failed: $($_.Exception.Message) Retrying in two seconds."
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+if($Verify){Test-InstalledEndpoint;return}
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'IIS, machine certificate and service installation require an elevated setup operation.'}
 $root=$c.directory;$private=Join-Path $root 'agent';$state=Join-Path $root 'state';$web=Join-Path $root ('releases/'+$c.revision)
@@ -148,7 +165,6 @@ if($c.remote_clients){
 }
 & $appcmd start apppool /apppool.name:$($c.site) 2>$null|Out-Null
 & $appcmd start site /site.name:$($c.site) 2>$null|Out-Null
-$response=Invoke-WebRequest ('https://'+$c.hostname+'/health/live') -TimeoutSec 15
-if($response.StatusCode -ne 200){throw 'The declared IIS HTTPS endpoint failed its health request.'}
+Test-InstalledEndpoint
 if($Enrollment -and (Test-Path -LiteralPath $Enrollment) -and [IO.Path]::GetFullPath($Enrollment) -ne $saved){Remove-Item -LiteralPath $Enrollment -Force}
 Write-Host "Installed https://$($c.hostname) with scoped OpenBao credentials and a verified machine certificate. Run connector verify for each declared profile."

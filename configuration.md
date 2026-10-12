@@ -86,7 +86,12 @@ record supplies `pfx_base64` and `password`. The private enrollment contains `ho
 minute. IIS uses its own application pool identity, with idle and periodic recycling
 disabled to avoid cutting off an engine session on an otherwise idle web server.
 `-Render` is an administrator credential-agent operation. `-Plan` reads the declaration
-without installing. Setup verifies HTTPS; `verify` proves an engine session separately.
+without installing. `-Verify` rechecks the installed HTTPS listener without elevation
+or mutation. Setup and `-Verify` require HTTP 200 and the expected live-service response
+through normal DNS and TLS validation, with three attempts, a 15-second connection
+timeout and a 15-second operation timeout per attempt, and two seconds between attempts.
+DNS resolution may itself take at least 15 seconds; these are request timeouts, not a
+guaranteed total wall-clock deadline. Connector `verify` proves an engine session separately.
 
 Certificate distribution imports renewed material supplied by the issuer. Neither
 connector installer issues an ACME certificate, starts a bot, promotes seeds or
