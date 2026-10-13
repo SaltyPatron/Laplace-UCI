@@ -48,7 +48,8 @@ try
                 while (await engine.ReceiveAsync(lifetime.Token) is { } line)
                 {
                     if (line.StartsWith("info string ")) Console.Error.WriteLine(line);
-                    if (line.StartsWith("id ") || line.StartsWith("bestmove ") || line.StartsWith("info string providers") || line.StartsWith("info string laplace knowledge "))
+                    if (line.StartsWith("id ") || line.StartsWith("bestmove ") || line.StartsWith("info string providers")
+                        || line.StartsWith("info string laplace database ") || line.StartsWith("info string laplace knowledge "))
                     {
                         if (lines.Count == 256) lines.RemoveAt(0);
                         lines.Add(line);

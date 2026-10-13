@@ -24,6 +24,9 @@ laplace-uci-connect serve --configuration installation.json
 client, the monorepo's Lichess adapter, Cutechess or Fastchess. `verify` performs the
 engine's actual handshake, readiness, new-game initialization and depth-one search.
 An absent move is a failure; the command never disables substrate participation.
+The result retains the engine's `info string laplace database` identity (and the
+older `laplace knowledge` form). The profile's `knowledge` field is a configured
+label; the reported cluster and database identify what the engine actually opened.
 
 `serve` binds loopback behind the installation's HTTPS ingress. Each `/uci/{profile}`
 connection needs a bearer token from the configured private token file. Only declared
