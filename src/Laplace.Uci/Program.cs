@@ -96,7 +96,8 @@ try
             await using var peer = new WebSocketConnection(socket, config.MaxLineBytes);
             await Connections.RelayAsync(peer, engine, context.RequestAborted);
         }
-        catch (Exception ex) when (ex is IOException or OperationCanceledException or System.Net.WebSockets.WebSocketException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException
+            or OperationCanceledException or System.Net.WebSockets.WebSocketException)
         {
             app.Logger.LogWarning("UCI session ended for profile {Profile}: {Failure}", profile, ex.GetType().Name);
             context.Abort();

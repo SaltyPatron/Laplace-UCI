@@ -80,12 +80,13 @@ def main():
         run(['useradd', '--system', '--home-dir', c['state_directory'], '--shell', '/usr/sbin/nologin', user])
         account = pwd.getpwnam(user)
     install, state, configuration = (Path(c[k]) for k in ['install_directory', 'state_directory', 'configuration_directory'])
-    for directory, private in [(install, False), (state, True), (configuration, True), (state / 'secrets', True)]:
+    for directory, private in [(install, False), (state, True), (configuration, True), (state / 'secrets', True), (state / 'logs', True)]:
         if directory.is_symlink():
             raise ValueError('Configured directory must not be a symlink: ' + str(directory))
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o750 if private else 0o755)
-        os.chown(directory, account.pw_uid if directory == state or directory == state / 'secrets' else 0, account.pw_gid)
+        service_owned = directory == state or directory.parent == state
+        os.chown(directory, account.pw_uid if service_owned else 0, account.pw_gid)
     # A complete revision directory keeps the serving executable intact until publication finishes.
     revision = c['revision']
     if not re.fullmatch(r'[a-f0-9]{7,64}', revision):

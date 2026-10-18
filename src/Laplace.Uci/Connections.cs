@@ -125,15 +125,24 @@ public sealed class ProcessConnection : IUciConnection
             foreach (var arg in profile.Arguments) info.ArgumentList.Add(arg);
             if (profile.WorkingDirectory is not null) info.WorkingDirectory = profile.WorkingDirectory;
             foreach (var file in profile.EnvironmentFiles)
-            foreach (var line in File.ReadLines(file))
             {
-                if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#')) continue;
-                int equals = line.IndexOf('=');
-                if (equals < 1) throw new InvalidDataException("Invalid engine environment file.");
-                var key = line[..equals].Trim();
-                var value = line[(equals + 1)..].Trim();
-                if (value.Length > 1 && value[0] is '\'' or '"' && value[^1] == value[0]) value = value[1..^1];
-                info.Environment[key] = value;
+                try
+                {
+                    foreach (var line in File.ReadLines(file))
+                    {
+                        if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#')) continue;
+                        int equals = line.IndexOf('=');
+                        if (equals < 1) throw new InvalidDataException("Invalid engine environment file.");
+                        var key = line[..equals].Trim();
+                        var value = line[(equals + 1)..].Trim();
+                        if (value.Length > 1 && value[0] is '\'' or '"' && value[^1] == value[0]) value = value[1..^1];
+                        info.Environment[key] = value;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new IOException($"Engine environment file cannot be read: {file}", ex);
+                }
             }
             foreach (var (key, value) in profile.Variables)
             {

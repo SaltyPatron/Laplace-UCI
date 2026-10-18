@@ -59,6 +59,14 @@ so the implementation discovers the files shipped in its selected release.
 Keep credentials in the private environment files. Public path declarations can
 set the implementation's shared configuration file through `variables`.
 
+The service user that spawns the engine must be able to read every
+`environmentFiles` entry. Do not list another service's private file, such as
+`/opt/laplace/app/laplace-api.env` (mode 0600, owned by the API user). Put
+`LD_LIBRARY_PATH`, `LAPLACE_INSTALL_PREFIX`, and `LAPLACE_OPS_LOG_DIR` in
+`variables`. Leave `LAPLACE_PERFCACHE_BIN` unset when the install prefix already
+contains the blob. Database credentials stay in the connector user's engine
+environment file.
+
 The monorepo's Lichess controller additionally checks actual PostgreSQL cluster and
 database identity reported by the engine, and requests `Refresh Knowledge` before
 each decision. Those semantics belong to the monorepo, not this generic transport.

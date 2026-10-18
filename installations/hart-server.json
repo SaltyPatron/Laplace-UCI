@@ -24,7 +24,12 @@
         "transport": "process",
         "executable": "/opt/laplace/app/uci/laplace-uci",
         "arguments": [ "uci", "--engine", "laplace" ],
-        "environmentFiles": [ "/opt/laplace/app/laplace-api.env", "/var/lib/laplace-mono-uci/secrets/engine.env" ],
+        "environmentFiles": [ "/var/lib/laplace-mono-uci/secrets/engine.env" ],
+        "variables": {
+          "LD_LIBRARY_PATH": "/opt/laplace/app:/opt/laplace/lib",
+          "LAPLACE_INSTALL_PREFIX": "/opt/laplace",
+          "LAPLACE_OPS_LOG_DIR": "/var/lib/laplace-mono-uci/logs"
+        },
         "workingDirectory": "/var/lib/laplace-mono-uci"
       }
     }
