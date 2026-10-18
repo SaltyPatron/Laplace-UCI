@@ -38,12 +38,51 @@ def write(path, value, mode=0o600, owner=None):
             os.unlink(tmp)
 
 
+def foreign_environment(path):
+    """Another service's private file. The UCI account must not be told to read it."""
+    text = str(path)
+    return Path(text).name == 'laplace-api.env' or text == '/opt/laplace/app/laplace-api.env'
+
+
+def scrub_connector(connector):
+    changed = False
+    profiles = connector.get('profiles') if isinstance(connector, dict) else None
+    if not isinstance(profiles, dict):
+        return False
+    for profile in profiles.values():
+        files = profile.get('environmentFiles') if isinstance(profile, dict) else None
+        if not isinstance(files, list):
+            continue
+        kept = [item for item in files if not foreign_environment(item)]
+        if kept != files:
+            profile['environmentFiles'] = kept
+            changed = True
+    return changed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--installation')
     parser.add_argument('--enrollment')
     parser.add_argument('--render')
+    parser.add_argument('--refresh', help='Rewrite the installed connector and restart its service.')
     args = parser.parse_args()
+    if args.refresh:
+        if os.geteuid() != 0:
+            parser.error('Run this refresh with sudo.')
+        installed = Path(args.refresh)
+        c = json.loads(installed.read_text())
+        scrub_connector(c['connector'])
+        configuration = Path(c['configuration_directory'])
+        account = pwd.getpwnam(c['user'])
+        config_path = configuration / 'connector.json'
+        write(config_path, json.dumps(c['connector'], indent=2), 0o640)
+        os.chown(config_path, 0, account.pw_gid)
+        write(installed, json.dumps(c), 0o640)
+        os.chown(installed, 0, account.pw_gid)
+        run(['systemctl', 'restart', c['service'] + '.service'])
+        write(configuration / 'refresh-receipt.json', json.dumps({'refreshed_at': time.time()}), 0o644)
+        return
     if args.render:
         c = json.loads(Path(args.render).read_text())
         state = Path(c['state_directory'])
@@ -101,6 +140,7 @@ def main():
         temporary.chmod(0o755)
         os.replace(temporary, release)
     connector = c['connector']
+    scrub_connector(connector)
     config_path = configuration / 'connector.json'
     write(configuration / 'enrollment.json', json.dumps(enrollment))
     write(configuration / 'installation.json', json.dumps(c), 0o640)
