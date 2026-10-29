@@ -43,6 +43,8 @@ function Test-InstalledEndpoint([string]$AssemblyHash) {
 }
 if($Verify){Test-InstalledEndpoint;return}
 if($Package){
+    $publication=[IO.File]::Open((Join-Path $c.directory '.publication.lock'),'OpenOrCreate','ReadWrite','None')
+    try{
     $Package=[IO.Path]::GetFullPath($Package)
     $program=Join-Path $Package 'laplace-uci-connect.exe'
     if(-not(Test-Path -LiteralPath $program -PathType Leaf)){throw 'The prepared package has no UCI connector.'}
@@ -97,6 +99,7 @@ if($Package){
         if($changed -and $previous){$directory.PhysicalPath=$previous;$manager.CommitChanges();$null=$pool.Recycle()}
         throw
     }finally{$manager.Dispose()}
+    }finally{$publication.Dispose()}
     return
 }
 if(-not $Render){
