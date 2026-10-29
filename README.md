@@ -28,6 +28,10 @@ The result retains the engine's `info string laplace database` identity (and the
 older `laplace knowledge` form). The profile's `knowledge` field is a configured
 label; the reported cluster and database identify what the engine actually opened.
 
+`verify --endpoint wss://host/uci/profile` runs the same search through the serving
+connector using the selected configuration's server token. It requires no temporary
+client profile and reports the observed database identity through the actual service.
+
 `serve` binds loopback behind the installation's HTTPS ingress. Each `/uci/{profile}`
 connection needs a bearer token from the configured private token file. Only declared
 local process profiles are callable; clients cannot submit commands, paths or credentials
@@ -99,6 +103,13 @@ contains `server_token` and `engine_env`. Certificate issuance/renewal belongs t
 the certificate producer. The agent imports changed certificates and updates the
 IIS binding. Repeating setup uses its retained administrator-only enrollment.
 Verify a real engine session after listener installation; health alone is insufficient.
+
+For an installed Windows host, `setup-iis.ps1 -Installation <host.json> -Package <published-directory> -VerifyProfile <profile>`
+publishes only the prepared connector. It validates candidate configuration and engine
+search, selects a directory identified by its bytes, and repeats the search through
+authenticated HTTPS. An unchanged package reuses its files and worker. It leaves
+credential enrollment, services and certificates to one-time setup. `-Reload` also
+recycles an unchanged worker after a public configuration change.
 
 The final HTTPS check uses normal DNS and certificate validation, verifies the service
 identity in the response, and retries three times to allow DNS and IIS startup to settle.

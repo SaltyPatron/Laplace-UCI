@@ -95,6 +95,7 @@ declared record. `--render` is an agent operation, not a human launch command.
 | Windows IIS declaration | Meaning |
 | --- | --- |
 | `host`, `site`, `hostname` | Target Windows machine, dedicated IIS pool/site and HTTPS name |
+| `windows_sid` | Declared operator SID receiving FullControl alongside SYSTEM and Administrators, including from a non-elevated shell |
 | `directory`, `publish`, `revision` | Installation root and published connector input |
 | `engine` | Installed engine executable; its directory receives pool read/execute access |
 | `engine_directory` | Optional containing runtime directory receiving pool read/execute access, including future published releases and their selection file |

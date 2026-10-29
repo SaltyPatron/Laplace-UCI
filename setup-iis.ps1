@@ -1,8 +1,17 @@
 #requires -Version 7
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Installation,[string]$Enrollment,[switch]$Render,[switch]$Plan,[switch]$Verify)
+param([Parameter(Mandatory)][string]$Installation,[string]$Enrollment,[switch]$Render,[switch]$Plan,[switch]$Verify,
+      [string]$Package,[string[]]$VerifyProfile=@(),[switch]$Reload)
 $ErrorActionPreference='Stop'
 $c=Get-Content -LiteralPath $Installation -Raw | ConvertFrom-Json
+function Write-Atomic([string]$Path,[string]$Value){[IO.File]::WriteAllText($Path+'.new',$Value);[IO.File]::Move($Path+'.new',$Path,$true)}
+function Json($Value){ConvertTo-Json -InputObject $Value -Depth 20 -Compress}
+function Connector-WebConfig([string]$State){
+    $arguments=[Security.SecurityElement]::Escape('serve --configuration "'+(Join-Path $c.directory 'connector.json')+'"')
+    '<configuration><system.webServer><handlers><add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" resourceType="Unspecified" /></handlers><aspNetCore processPath=".\laplace-uci-connect.exe" arguments="'+$arguments+'" hostingModel="inprocess" stdoutLogEnabled="true" stdoutLogFile="'+[Security.SecurityElement]::Escape((Join-Path $State 'logs/iis'))+'" /></system.webServer></configuration>'
+}
+if($Package -and ($Render -or $Verify -or $Enrollment)){throw '-Package publishes an installed connector; do not combine it with provisioning or credential rendering.'}
+if($Reload -and -not $Package){throw '-Reload applies to prepared package publication.'}
 foreach($name in 'directory','publish','engine','bao') {
     if(-not [IO.Path]::IsPathFullyQualified($c.$name)){throw "Declare an absolute $name path."}
 }
@@ -11,6 +20,10 @@ if($c.site -notmatch '^[a-zA-Z0-9-]+$' -or $c.hostname -notmatch '^[a-zA-Z0-9.-]
 if(-not $c.address.StartsWith('https://') -or $c.runtime_record -notmatch '^kv/data/[a-zA-Z0-9_/-]+$' -or $c.certificate_record -notmatch '^kv/data/[a-zA-Z0-9_/-]+$'){throw 'Declare HTTPS OpenBao and exact KV records.'}
 if([IO.Path]::GetFullPath($c.directory).TrimEnd('\') -eq [IO.Path]::GetPathRoot($c.directory).TrimEnd('\')){throw 'The installation directory must not be a volume root.'}
 if($Plan){$c|ConvertTo-Json -Depth 12;return}
+if(-not $Render -and -not $Verify -and -not $Package){
+    if($c.windows_sid -notmatch '^S-1-5-21-(?:\d+-){3}\d+$'){throw 'Declare the Windows operator SID so non-elevated maintenance retains access.'}
+    $null=[Security.Principal.SecurityIdentifier]::new($c.windows_sid)
+}
 function Test-InstalledEndpoint {
     $uri='https://'+$c.hostname+'/health/live'
     for($attempt=1;$attempt -le 3;$attempt++){
@@ -28,6 +41,57 @@ function Test-InstalledEndpoint {
     }
 }
 if($Verify){Test-InstalledEndpoint;return}
+if($Package){
+    $Package=[IO.Path]::GetFullPath($Package)
+    $program=Join-Path $Package 'laplace-uci-connect.exe'
+    if(-not(Test-Path -LiteralPath $program -PathType Leaf)){throw 'The prepared package has no UCI connector.'}
+    $files=@(Get-ChildItem -LiteralPath $Package -Recurse -File|Where-Object Name -NE web.config|Sort-Object FullName)
+    if(@($files|Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'A UCI package must contain regular files.'}
+    $entries=@($files|ForEach-Object {[IO.Path]::GetRelativePath($Package,$_.FullName).Replace('\','/')+':'+(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()})
+    $revision=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($entries -join "`n"))).ToLowerInvariant()
+    $configuration=Join-Path $c.directory 'connector.json'
+    # A candidate must parse the real configuration and open the actual engine
+    # before it can replace the serving connector. No build/credential service runs here.
+    & $program catalog --configuration $configuration|Out-Null
+    if($LASTEXITCODE){throw 'The candidate connector rejected the installed configuration.'}
+    foreach($profile in $VerifyProfile){
+        & $program verify --configuration $configuration --profile $profile
+        if($LASTEXITCODE){throw "Candidate UCI engine verification failed: $profile"}
+    }
+    $web=Join-Path $c.directory ('releases/'+$revision)
+    if(-not(Test-Path -LiteralPath $web)){
+        $null=New-Item -ItemType Directory -Path $web
+        Copy-Item -Path (Join-Path $Package '*') -Destination $web -Recurse
+    }
+    foreach($file in $files){
+        $target=Join-Path $web ([IO.Path]::GetRelativePath($Package,$file.FullName))
+        if(-not(Test-Path -LiteralPath $target -PathType Leaf) -or (Get-FileHash -LiteralPath $target).Hash -cne (Get-FileHash -LiteralPath $file.FullName).Hash){throw 'The installed UCI release differs from its prepared bytes.'}
+    }
+    $webConfig=Join-Path $web 'web.config';$desired=Connector-WebConfig (Join-Path $c.directory 'state')
+    if(-not(Test-Path -LiteralPath $webConfig) -or [IO.File]::ReadAllText($webConfig) -cne $desired){Write-Atomic $webConfig $desired}
+    Add-Type -Path "$env:windir/System32/inetsrv/Microsoft.Web.Administration.dll"
+    $manager=[Microsoft.Web.Administration.ServerManager]::new();$previous=$null;$changed=$false
+    try{
+        $site=$manager.Sites[$c.site];$pool=$manager.ApplicationPools[$c.site]
+        if(-not $site -or -not $pool){throw 'Run the one-time UCI IIS setup before publishing.'}
+        $directory=$site.Applications['/'].VirtualDirectories['/'];$previous=$directory.PhysicalPath
+        $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
+        if($changed){$directory.PhysicalPath=$web;$manager.CommitChanges()}
+        if($changed -or $Reload){if($pool.State -eq 'Stopped'){$null=$pool.Start()}else{$null=$pool.Recycle()}}
+        Test-InstalledEndpoint
+        foreach($profile in $VerifyProfile){
+            & (Join-Path $web 'laplace-uci-connect.exe') verify --configuration $configuration --profile $profile --endpoint ('wss://'+$c.hostname+'/uci/'+$profile)
+            if($LASTEXITCODE){throw "Serving UCI engine verification failed: $profile"}
+        }
+        $c.revision=$revision;$c.publish=$web
+        Write-Atomic (Join-Path $c.directory 'agent/installation.json') (Json $c)
+        [ordered]@{revision=$revision;release=$web;activation=$(if($changed -or $Reload){'restarted'}else{'reused'});profiles=$VerifyProfile}|ConvertTo-Json -Depth 5
+    }catch{
+        if($changed -and $previous){$directory.PhysicalPath=$previous;$manager.CommitChanges();$null=$pool.Recycle()}
+        throw
+    }finally{$manager.Dispose()}
+    return
+}
 if(-not $Render){
     $baoVersion=(& $c.bao version | Out-String).Trim()
     if($LASTEXITCODE -or $baoVersion -notmatch '^OpenBao v(\d+\.\d+\.\d+)\s' -or [version]$Matches[1] -lt [version]'2.7.1'){
@@ -37,8 +101,6 @@ if(-not $Render){
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'IIS, machine certificate and service installation require an elevated setup operation.'}
 $root=$c.directory;$private=Join-Path $root 'agent';$state=Join-Path $root 'state';$web=Join-Path $root ('releases/'+$c.revision)
-function Write-Atomic([string]$Path,[string]$Value){[IO.File]::WriteAllText($Path+'.new',$Value);[IO.File]::Move($Path+'.new',$Path,$true)}
-function Json($Value){ConvertTo-Json -InputObject $Value -Depth 12 -Compress}
 Add-Type -Path "$env:windir/System32/inetsrv/Microsoft.Web.Administration.dll"
 if($Render){
     $candidate=Get-Content -LiteralPath (Join-Path $private 'candidate.json') -Raw|ConvertFrom-Json
@@ -84,7 +146,7 @@ foreach($p in @($root,$private,$state,$web)){[void](New-Item -ItemType Directory
 function Protect-Directory([string]$Path,[bool]$AllowPool,[bool]$Writable){
     $acl=Get-Acl -LiteralPath $Path;$acl.SetAccessRuleProtection($true,$false)
     foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)}
-    foreach($sid in @('S-1-5-18','S-1-5-32-544')){$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),'FullControl','ContainerInherit,ObjectInherit','None','Allow'))}
+    foreach($sid in @('S-1-5-18','S-1-5-32-544',$c.windows_sid)){$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.SecurityIdentifier]::new($sid),'FullControl','ContainerInherit,ObjectInherit','None','Allow'))}
     if($AllowPool){$rights=if($Writable){'Modify'}else{'ReadAndExecute'};$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(('IIS APPPOOL\'+$c.site),$rights,'ContainerInherit,ObjectInherit','None','Allow'))}
     [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($Path),$acl)
 }
@@ -137,8 +199,7 @@ Write-Atomic (Join-Path $root 'postgres-root.crt') $c.database_certificate
 $c.bao=$bao
 Write-Atomic (Join-Path $private 'installation.json') (Json $c)
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $private 'setup-iis.ps1') -Force
-$arguments=[Security.SecurityElement]::Escape('serve --configuration "'+(Join-Path $root 'connector.json')+'"')
-Write-Atomic (Join-Path $web 'web.config') ('<configuration><system.webServer><handlers><add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" resourceType="Unspecified" /></handlers><aspNetCore processPath=".\laplace-uci-connect.exe" arguments="'+$arguments+'" hostingModel="inprocess" stdoutLogEnabled="true" stdoutLogFile="'+[Security.SecurityElement]::Escape((Join-Path $logs 'iis'))+'" /></system.webServer></configuration>')
+Write-Atomic (Join-Path $web 'web.config') (Connector-WebConfig $state)
 $saved=Join-Path $private 'enrollment.json'
 if($Enrollment -and (Test-Path -LiteralPath $Enrollment)){$e=Get-Content -LiteralPath $Enrollment -Raw|ConvertFrom-Json;Write-Atomic $saved (Json $e)}else{$e=Get-Content -LiteralPath $saved -Raw|ConvertFrom-Json}
 if($e.host -ne $c.host -or $e.address -ne $c.address){throw 'Workload enrollment does not match this host.'}

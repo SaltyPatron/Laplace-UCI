@@ -11,6 +11,7 @@ try
     if (command == "help")
     {
         Console.WriteLine("laplace-uci-connect catalog|connect|verify|serve [--configuration FILE] [--profile NAME]");
+        Console.WriteLine("verify --endpoint WSS_URL checks a serving connector with this installation's server token.");
         Console.WriteLine("Configuration: --configuration, LAPLACE_UCI_CONFIG, then the user's Laplace/uci/configuration.json application-config file.");
         return 0;
     }
@@ -32,6 +33,13 @@ try
     {
         var id = Value("--profile");
         var profile = config.Get(id);
+        if(command == "verify" && args.Contains("--endpoint"))
+        {
+            var endpoint = Value("--endpoint");
+            _ = ConnectorConfiguration.WebSocketEndpoint(endpoint, config.ServerTokenFile);
+            profile = profile with { Transport="websocket", Endpoint=endpoint, TokenFile=config.ServerTokenFile,
+                Executable=null, Release=null, EnvironmentFiles=[], Variables=[], WorkingDirectory=null };
+        }
         await using var engine = await Connections.OpenAsync(profile, config.MaxLineBytes, lifetime.Token);
         if (command == "connect")
         {
@@ -66,7 +74,7 @@ try
             await engine.SendAsync("go depth 1", lifetime.Token); await Until("bestmove");
             if (lines.Last() is "bestmove 0000" or "bestmove (none)") throw new IOException("Engine produced no move from the initial position.");
             Console.WriteLine(JsonSerializer.Serialize(new { profile = id, profile.Implementation, profile.Environment,
-                profile.Knowledge, verifiedUtc = DateTimeOffset.UtcNow, lines }, ConnectorConfiguration.Json));
+                profile.Knowledge, profile.Transport, profile.Endpoint, verifiedUtc = DateTimeOffset.UtcNow, lines }, ConnectorConfiguration.Json));
         }
         return 0;
     }

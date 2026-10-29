@@ -16,6 +16,7 @@ public static class Connections
     {
         if (profile.Transport == "websocket")
         {
+            var endpoint = ConnectorConfiguration.WebSocketEndpoint(profile.Endpoint, profile.TokenFile);
             var socket = new ClientWebSocket();
             try
             {
@@ -24,7 +25,7 @@ public static class Connections
                 socket.Options.KeepAliveTimeout = TimeSpan.FromSeconds(15);
                 using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 deadline.CancelAfter(TimeSpan.FromSeconds(profile.ConnectTimeoutSeconds));
-                await socket.ConnectAsync(new Uri(profile.Endpoint!), deadline.Token);
+                await socket.ConnectAsync(endpoint, deadline.Token);
                 return new WebSocketConnection(socket, maxLineBytes);
             }
             catch { socket.Dispose(); throw; }

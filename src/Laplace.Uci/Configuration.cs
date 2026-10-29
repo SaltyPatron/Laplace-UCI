@@ -92,11 +92,7 @@ public sealed record ConnectorConfiguration
             else if (p.Transport == "websocket")
             {
                 if (p.Release is not null || p.Variables.Count != 0) throw new InvalidDataException($"Profile {id}: configure the release and variables on the remote process profile.");
-                if (!Uri.TryCreate(p.Endpoint, UriKind.Absolute, out var uri)
-                    || (uri.Scheme != "wss" && !(uri.Scheme == "ws" && uri.IsLoopback))
-                    || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0
-                    || string.IsNullOrWhiteSpace(p.TokenFile))
-                    throw new InvalidDataException($"Profile {id} needs a secure WebSocket endpoint and token file.");
+                _ = WebSocketEndpoint(p.Endpoint, p.TokenFile);
             }
             else throw new InvalidDataException($"Profile {id} has unsupported transport.");
         }
@@ -105,6 +101,16 @@ public sealed record ConnectorConfiguration
 
     public EngineProfile Get(string id) => Profiles.GetValueOrDefault(id)
         ?? throw new InvalidDataException($"Unknown UCI profile: {id}");
+
+    public static Uri WebSocketEndpoint(string? endpoint, string? tokenFile)
+    {
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+            || (uri.Scheme != "wss" && !(uri.Scheme == "ws" && uri.IsLoopback))
+            || uri.UserInfo.Length != 0 || uri.Query.Length != 0 || uri.Fragment.Length != 0
+            || string.IsNullOrWhiteSpace(tokenFile))
+            throw new InvalidDataException("A secure WebSocket endpoint and token file are required.");
+        return uri;
+    }
 
     public static string Token(string? path)
     {
