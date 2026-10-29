@@ -87,7 +87,8 @@ try
     var app = builder.Build();
     app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(15), KeepAliveTimeout = TimeSpan.FromSeconds(15) });
     using var slots = new SemaphoreSlim(config.MaxSessions);
-    app.MapGet("/health/live", () => Results.Json(new { service = "laplace-uci", live = true }));
+    var assemblyHash = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(typeof(ConnectorConfiguration).Assembly.Location)));
+    app.MapGet("/health/live", () => Results.Json(new { service = "laplace-uci", live = true, assembly_sha256 = assemblyHash }));
     app.Map("/uci/{profile}", async (HttpContext context, string profile) =>
     {
         var authorization = context.Request.Headers.Authorization.ToString();

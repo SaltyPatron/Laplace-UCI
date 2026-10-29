@@ -24,13 +24,14 @@ if(-not $Render -and -not $Verify -and -not $Package){
     if($c.windows_sid -notmatch '^S-1-5-21-(?:\d+-){3}\d+$'){throw 'Declare the Windows operator SID so non-elevated maintenance retains access.'}
     $null=[Security.Principal.SecurityIdentifier]::new($c.windows_sid)
 }
-function Test-InstalledEndpoint {
+function Test-InstalledEndpoint([string]$AssemblyHash) {
     $uri='https://'+$c.hostname+'/health/live'
     for($attempt=1;$attempt -le 3;$attempt++){
         try{
             $response=Invoke-WebRequest $uri -ConnectionTimeoutSeconds 15 -OperationTimeoutSeconds 15 -MaximumRedirection 0
             $health=$response.Content|ConvertFrom-Json
             if($response.StatusCode -ne 200 -or $health.service -ne 'laplace-uci' -or $health.live -ne $true){throw 'The endpoint did not identify a live Laplace UCI service.'}
+            if($AssemblyHash -and $health.assembly_sha256 -cne $AssemblyHash){throw 'The serving UCI assembly differs from the selected package.'}
             Write-Host "Verified $uri through normal DNS and certificate validation."
             return
         }catch{
@@ -45,7 +46,7 @@ if($Package){
     $Package=[IO.Path]::GetFullPath($Package)
     $program=Join-Path $Package 'laplace-uci-connect.exe'
     if(-not(Test-Path -LiteralPath $program -PathType Leaf)){throw 'The prepared package has no UCI connector.'}
-    $files=@(Get-ChildItem -LiteralPath $Package -Recurse -File|Where-Object Name -NE web.config|Sort-Object FullName)
+    $files=@(Get-ChildItem -LiteralPath $Package -Recurse -File|Where-Object Name -NotIn @('web.config','uci-package.json')|Sort-Object FullName)
     if(@($files|Where-Object {$_.Attributes -band [IO.FileAttributes]::ReparsePoint}).Count){throw 'A UCI package must contain regular files.'}
     $entries=@($files|ForEach-Object {[IO.Path]::GetRelativePath($Package,$_.FullName).Replace('\','/')+':'+(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()})
     $revision=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($entries -join "`n"))).ToLowerInvariant()
@@ -67,6 +68,12 @@ if($Package){
         $target=Join-Path $web ([IO.Path]::GetRelativePath($Package,$file.FullName))
         if(-not(Test-Path -LiteralPath $target -PathType Leaf) -or (Get-FileHash -LiteralPath $target).Hash -cne (Get-FileHash -LiteralPath $file.FullName).Hash){throw 'The installed UCI release differs from its prepared bytes.'}
     }
+    $manifest=[ordered]@{schema='laplace.uci-package/v1';revision=$revision;files=@($files|ForEach-Object {
+        [ordered]@{path=[IO.Path]::GetRelativePath($Package,$_.FullName).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant()}
+    })}
+    $manifestPath=Join-Path $web 'uci-package.json';$manifestJson=Json $manifest
+    if(-not(Test-Path -LiteralPath $manifestPath) -or [IO.File]::ReadAllText($manifestPath) -cne $manifestJson){Write-Atomic $manifestPath $manifestJson}
+    $assemblyHash=(Get-FileHash -LiteralPath (Join-Path $web 'laplace-uci-connect.dll')).Hash.ToLowerInvariant()
     $webConfig=Join-Path $web 'web.config';$desired=Connector-WebConfig (Join-Path $c.directory 'state')
     if(-not(Test-Path -LiteralPath $webConfig) -or [IO.File]::ReadAllText($webConfig) -cne $desired){Write-Atomic $webConfig $desired}
     Add-Type -Path "$env:windir/System32/inetsrv/Microsoft.Web.Administration.dll"
@@ -78,7 +85,7 @@ if($Package){
         $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
         if($changed){$directory.PhysicalPath=$web;$manager.CommitChanges()}
         if($changed -or $Reload){if($pool.State -eq 'Stopped'){$null=$pool.Start()}else{$null=$pool.Recycle()}}
-        Test-InstalledEndpoint
+        Test-InstalledEndpoint $assemblyHash
         foreach($profile in $VerifyProfile){
             & (Join-Path $web 'laplace-uci-connect.exe') verify --configuration $configuration --profile $profile --endpoint ('wss://'+$c.hostname+'/uci/'+$profile)
             if($LASTEXITCODE){throw "Serving UCI engine verification failed: $profile"}
