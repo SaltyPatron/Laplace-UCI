@@ -1,8 +1,0 @@
-bin/
-obj/
-artifacts/
-*.user
-*.token
-installation.json
-__pycache__/
-
