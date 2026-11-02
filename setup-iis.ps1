@@ -6,9 +6,10 @@ $ErrorActionPreference='Stop'
 $c=Get-Content -LiteralPath $Installation -Raw | ConvertFrom-Json
 function Write-Atomic([string]$Path,[string]$Value){[IO.File]::WriteAllText($Path+'.new',$Value);[IO.File]::Move($Path+'.new',$Path,$true)}
 function Json($Value){ConvertTo-Json -InputObject $Value -Depth 20 -Compress}
-function Connector-WebConfig([string]$State){
+function Connector-WebConfig([string]$State,[string]$HostDirectory,[string]$ReleaseDirectory){
     $arguments=[Security.SecurityElement]::Escape('serve --configuration "'+(Join-Path $c.directory 'connector.json')+'"')
-    '<configuration><system.webServer><handlers><add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" resourceType="Unspecified" /></handlers><aspNetCore processPath=".\laplace-uci-connect.exe" arguments="'+$arguments+'" hostingModel="inprocess" stdoutLogEnabled="true" stdoutLogFile="'+[Security.SecurityElement]::Escape((Join-Path $State 'logs/iis'))+'" /></system.webServer></configuration>'
+    $executable=[Security.SecurityElement]::Escape([IO.Path]::GetRelativePath($HostDirectory,(Join-Path $ReleaseDirectory 'laplace-uci-connect.exe')))
+    '<configuration><system.webServer><handlers><add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" resourceType="Unspecified" /></handlers><aspNetCore processPath="'+$executable+'" arguments="'+$arguments+'" hostingModel="inprocess" stdoutLogEnabled="true" stdoutLogFile="'+[Security.SecurityElement]::Escape((Join-Path $State 'logs/iis'))+'" /></system.webServer></configuration>'
 }
 if($Package -and ($Render -or $Verify -or $Enrollment)){throw '-Package publishes an installed connector; do not combine it with provisioning or credential rendering.'}
 if($Reload -and -not $Package){throw '-Reload applies to prepared package publication.'}
@@ -41,14 +42,7 @@ function Test-InstalledEndpoint([string]$AssemblyHash) {
         }
     }
 }
-function Restart-UciPool($Manager,[string]$Web) {
-    $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-    if($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
-        $pool=$Manager.ApplicationPools[$c.site]
-        if(-not $pool){throw 'Run the one-time UCI IIS setup before publishing.'}
-        if($pool.State -eq 'Stopped'){$null=$pool.Start()}else{$null=$pool.Recycle()}
-        return
-    }
+function Restart-UciPool([string]$Web) {
     $offline=Join-Path $Web 'app_offline.htm'
     $origin='https://'+$c.hostname
     $token='laplace-uci-restart-'+[Guid]::NewGuid().ToString('N')
@@ -64,7 +58,8 @@ function Restart-UciPool($Manager,[string]$Web) {
         $markerStream=$null
         for($attempt=0;$attempt -lt 15;$attempt++){
             $response=Invoke-WebRequest $origin -NoProxy -SkipHttpErrorCheck -TimeoutSec 10
-            if($response.Content.Contains($token)){$observed=$true;break}
+            $body=if($response.Content -is [byte[]]){[Text.Encoding]::UTF8.GetString($response.Content)}else{[string]$response.Content}
+            if($body.Contains($token)){$observed=$true;break}
             Start-Sleep -Milliseconds 200
         }
         if(-not $observed){throw 'IIS did not serve the restart marker; the selected UCI endpoint has not confirmed the restart.'}
@@ -111,36 +106,34 @@ if($Package){
     $manifestPath=Join-Path $web 'uci-package.json';$manifestJson=Json $manifest
     if(-not(Test-Path -LiteralPath $manifestPath) -or [IO.File]::ReadAllText($manifestPath) -cne $manifestJson){Write-Atomic $manifestPath $manifestJson}
     $assemblyHash=(Get-FileHash -LiteralPath (Join-Path $web 'laplace-uci-connect.dll')).Hash.ToLowerInvariant()
-    $webConfig=Join-Path $web 'web.config';$desired=Connector-WebConfig (Join-Path $c.directory 'state')
-    if(-not(Test-Path -LiteralPath $webConfig) -or [IO.File]::ReadAllText($webConfig) -cne $desired){Write-Atomic $webConfig $desired}
-    $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-    $isAdmin=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    $previous=$c.publish
-    $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
-    if($changed -and -not $isAdmin){throw 'Updating the UCI IIS site physical path requires an elevated PowerShell session.'}
-    Add-Type -Path "$env:windir/System32/inetsrv/Microsoft.Web.Administration.dll"
-    $manager=if($isAdmin){[Microsoft.Web.Administration.ServerManager]::new()}else{$null}
+    $hostDirectory=[IO.Path]::GetFullPath($(if($c.host_directory){$c.host_directory}else{$c.publish}))
+    $root=[IO.Path]::GetFullPath($c.directory).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
+    if(-not $hostDirectory.StartsWith($root,[StringComparison]::OrdinalIgnoreCase) -or
+        -not(Test-Path -LiteralPath $hostDirectory -PathType Container) -or
+        ((Get-Item -LiteralPath $hostDirectory -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){
+        throw 'The provisioned UCI host must be a real directory within this installation.'
+    }
+    $webConfig=Join-Path $hostDirectory 'web.config'
+    if(-not(Test-Path -LiteralPath $webConfig -PathType Leaf)){throw 'Run the one-time UCI IIS setup before publishing.'}
+    $previous=[IO.File]::ReadAllText($webConfig)
+    $desired=Connector-WebConfig (Join-Path $c.directory 'state') $hostDirectory $web
+    $changed=$previous -cne $desired
     try{
-        if($isAdmin){
-            $site=$manager.Sites[$c.site];$pool=$manager.ApplicationPools[$c.site]
-            if(-not $site -or -not $pool){throw 'Run the one-time UCI IIS setup before publishing.'}
-            $directory=$site.Applications['/'].VirtualDirectories['/'];$previous=$directory.PhysicalPath
-            $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
-            if($changed){$directory.PhysicalPath=$web;$manager.CommitChanges()}
-        }
-        if($changed -or $Reload){Restart-UciPool $manager $web}
+        if($changed){Write-Atomic $webConfig $desired}
+        if($changed -or $Reload){Restart-UciPool $hostDirectory}
         Test-InstalledEndpoint $assemblyHash
         foreach($profile in $VerifyProfile){
             & (Join-Path $web 'laplace-uci-connect.exe') verify --configuration $configuration --profile $profile --endpoint ('wss://'+$c.hostname+'/uci/'+$profile)
             if($LASTEXITCODE){throw "Serving UCI engine verification failed: $profile"}
         }
         $c.revision=$revision;$c.publish=$web
+        $c|Add-Member host_directory $hostDirectory -Force
         Write-Atomic (Join-Path $c.directory 'agent/installation.json') (Json $c)
         [ordered]@{revision=$revision;release=$web;activation=$(if($changed -or $Reload){'restarted'}else{'reused'});profiles=$VerifyProfile}|ConvertTo-Json -Depth 5
     }catch{
-        if($changed -and $previous -and $isAdmin){$directory.PhysicalPath=$previous;$manager.CommitChanges();$null=$pool.Recycle()}
+        if($changed){Write-Atomic $webConfig $previous;Restart-UciPool $hostDirectory}
         throw
-    }finally{if($manager){$manager.Dispose()}}
+    }
     }finally{$publication.Dispose()}
     return
 }
@@ -152,7 +145,7 @@ if(-not $Render){
 }
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'IIS, machine certificate and service installation require an elevated setup operation.'}
-$root=$c.directory;$private=Join-Path $root 'agent';$state=Join-Path $root 'state';$web=Join-Path $root ('releases/'+$c.revision)
+$root=$c.directory;$private=Join-Path $root 'agent';$state=Join-Path $root 'state';$web=Join-Path $root ('releases/'+$c.revision);$hostDirectory=Join-Path $root 'web'
 Add-Type -Path "$env:windir/System32/inetsrv/Microsoft.Web.Administration.dll"
 if($Render){
     $candidate=Get-Content -LiteralPath (Join-Path $private 'candidate.json') -Raw|ConvertFrom-Json
@@ -194,7 +187,7 @@ foreach($path in $c.read_paths){
     }
 }
 if($c.revision -notmatch '^[a-f0-9]{7,64}$'){throw 'Declare the published connector revision.'}
-foreach($p in @($root,$private,$state,$web)){[void](New-Item -ItemType Directory -Path $p -Force)}
+foreach($p in @($root,$private,$state,$web,$hostDirectory)){[void](New-Item -ItemType Directory -Path $p -Force)}
 function Protect-Directory([string]$Path,[bool]$AllowPool,[bool]$Writable){
     $acl=Get-Acl -LiteralPath $Path;$acl.SetAccessRuleProtection($true,$false)
     foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)}
@@ -214,7 +207,7 @@ try{
     $pool.ProcessModel.IdleTimeout=[TimeSpan]::Zero
     $pool.Recycling.PeriodicRestart.Time=[TimeSpan]::Zero
     $site=$manager.Sites[$c.site]
-    if(-not $site){$site=$manager.Sites.Add($c.site,'https',('*:443:'+$c.hostname),$web);$site.ServerAutoStart=$false}
+    if(-not $site){$site=$manager.Sites.Add($c.site,'https',('*:443:'+$c.hostname),$hostDirectory);$site.ServerAutoStart=$false}
     elseif(@($site.Bindings|Where-Object BindingInformation -NE ('*:443:'+$c.hostname)).Count){throw 'Existing IIS site bindings differ from this declaration.'}
     $site.Applications['/'].ApplicationPoolName=$c.site
     $anonymous=$manager.GetApplicationHostConfiguration().GetSection('system.webServer/security/authentication/anonymousAuthentication',$c.site)
@@ -249,9 +242,11 @@ if(Test-Path (Join-Path $web 'laplace-uci-connect.exe')){
 Write-Atomic (Join-Path $root 'connector.json') (Json $c.connector)
 Write-Atomic (Join-Path $root 'postgres-root.crt') $c.database_certificate
 $c.bao=$bao
+$c.publish=$web
+$c|Add-Member host_directory $hostDirectory -Force
 Write-Atomic (Join-Path $private 'installation.json') (Json $c)
 Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $private 'setup-iis.ps1') -Force
-Write-Atomic (Join-Path $web 'web.config') (Connector-WebConfig $state)
+Write-Atomic (Join-Path $hostDirectory 'web.config') (Connector-WebConfig $state $hostDirectory $web)
 $saved=Join-Path $private 'enrollment.json'
 if($Enrollment -and (Test-Path -LiteralPath $Enrollment)){$e=Get-Content -LiteralPath $Enrollment -Raw|ConvertFrom-Json;Write-Atomic $saved (Json $e)}else{$e=Get-Content -LiteralPath $saved -Raw|ConvertFrom-Json}
 if($e.host -ne $c.host -or $e.address -ne $c.address){throw 'Workload enrollment does not match this host.'}
@@ -298,7 +293,7 @@ for($i=0;$i -lt 60;$i++){
 }
 if(-not $ready){throw 'The workload agent did not install current credentials and certificate; inspect the service log.'}
 $manager=[Microsoft.Web.Administration.ServerManager]::new()
-try{$manager.Sites[$c.site].Applications['/'].VirtualDirectories['/'].PhysicalPath=$web;$manager.Sites[$c.site].ServerAutoStart=$true;$manager.CommitChanges()}finally{$manager.Dispose()}
+try{$manager.Sites[$c.site].Applications['/'].VirtualDirectories['/'].PhysicalPath=$hostDirectory;$manager.Sites[$c.site].ServerAutoStart=$true;$manager.CommitChanges()}finally{$manager.Dispose()}
 if($c.remote_clients){
     if(Get-NetFirewallRule -Name $c.site -ErrorAction SilentlyContinue){Get-NetFirewallRule -Name $c.site | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress $c.remote_clients}
     else{New-NetFirewallRule -Name $c.site -DisplayName 'Laplace UCI private HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 443 -RemoteAddress $c.remote_clients | Out-Null}
