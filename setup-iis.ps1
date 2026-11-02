@@ -41,6 +41,41 @@ function Test-InstalledEndpoint([string]$AssemblyHash) {
         }
     }
 }
+function Restart-UciPool($Manager,[string]$Web) {
+    $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
+        $pool=$Manager.ApplicationPools[$c.site]
+        if(-not $pool){throw 'Run the one-time UCI IIS setup before publishing.'}
+        if($pool.State -eq 'Stopped'){$null=$pool.Start()}else{$null=$pool.Recycle()}
+        return
+    }
+    $offline=Join-Path $Web 'app_offline.htm'
+    $origin='https://'+$c.hostname
+    $token='laplace-uci-restart-'+[Guid]::NewGuid().ToString('N')
+    $marker="<!doctype html><html><body>UCI connector restarting. <!-- $token --></body></html>"
+    $markerStream=$null;$created=$false;$observed=$false
+    try {
+        $markerStream=[IO.File]::Open($offline,'CreateNew','Write','Read')
+        $created=$true
+        $bytes=[Text.Encoding]::UTF8.GetBytes($marker)
+        $markerStream.Write($bytes,0,$bytes.Length)
+        $markerStream.Flush($true)
+        $markerStream.Dispose()
+        $markerStream=$null
+        for($attempt=0;$attempt -lt 15;$attempt++){
+            $response=Invoke-WebRequest $origin -NoProxy -SkipHttpErrorCheck -TimeoutSec 10
+            if($response.Content.Contains($token)){$observed=$true;break}
+            Start-Sleep -Milliseconds 200
+        }
+        if(-not $observed){throw 'IIS did not serve the restart marker; the selected UCI endpoint has not confirmed the restart.'}
+    }finally{
+        if($markerStream){$markerStream.Dispose()}
+        if($created){
+            if([IO.File]::ReadAllText($offline) -cne $marker){throw 'The offline marker changed during restart; it was preserved for inspection.'}
+            Remove-Item -LiteralPath $offline -ErrorAction Stop
+        }
+    }
+}
 if($Verify){Test-InstalledEndpoint;return}
 if($Package){
     $publication=[IO.File]::Open((Join-Path $c.directory '.publication.lock'),'OpenOrCreate','ReadWrite','None')
@@ -78,15 +113,22 @@ if($Package){
     $assemblyHash=(Get-FileHash -LiteralPath (Join-Path $web 'laplace-uci-connect.dll')).Hash.ToLowerInvariant()
     $webConfig=Join-Path $web 'web.config';$desired=Connector-WebConfig (Join-Path $c.directory 'state')
     if(-not(Test-Path -LiteralPath $webConfig) -or [IO.File]::ReadAllText($webConfig) -cne $desired){Write-Atomic $webConfig $desired}
+    $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    $isAdmin=$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $previous=$c.publish
+    $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
+    if($changed -and -not $isAdmin){throw 'Updating the UCI IIS site physical path requires an elevated PowerShell session.'}
     Add-Type -Path "$env:windir/System32/inetsrv/Microsoft.Web.Administration.dll"
-    $manager=[Microsoft.Web.Administration.ServerManager]::new();$previous=$null;$changed=$false
+    $manager=if($isAdmin){[Microsoft.Web.Administration.ServerManager]::new()}else{$null}
     try{
-        $site=$manager.Sites[$c.site];$pool=$manager.ApplicationPools[$c.site]
-        if(-not $site -or -not $pool){throw 'Run the one-time UCI IIS setup before publishing.'}
-        $directory=$site.Applications['/'].VirtualDirectories['/'];$previous=$directory.PhysicalPath
-        $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
-        if($changed){$directory.PhysicalPath=$web;$manager.CommitChanges()}
-        if($changed -or $Reload){if($pool.State -eq 'Stopped'){$null=$pool.Start()}else{$null=$pool.Recycle()}}
+        if($isAdmin){
+            $site=$manager.Sites[$c.site];$pool=$manager.ApplicationPools[$c.site]
+            if(-not $site -or -not $pool){throw 'Run the one-time UCI IIS setup before publishing.'}
+            $directory=$site.Applications['/'].VirtualDirectories['/'];$previous=$directory.PhysicalPath
+            $changed=[IO.Path]::GetFullPath($previous) -ine [IO.Path]::GetFullPath($web)
+            if($changed){$directory.PhysicalPath=$web;$manager.CommitChanges()}
+        }
+        if($changed -or $Reload){Restart-UciPool $manager $web}
         Test-InstalledEndpoint $assemblyHash
         foreach($profile in $VerifyProfile){
             & (Join-Path $web 'laplace-uci-connect.exe') verify --configuration $configuration --profile $profile --endpoint ('wss://'+$c.hostname+'/uci/'+$profile)
@@ -96,9 +138,9 @@ if($Package){
         Write-Atomic (Join-Path $c.directory 'agent/installation.json') (Json $c)
         [ordered]@{revision=$revision;release=$web;activation=$(if($changed -or $Reload){'restarted'}else{'reused'});profiles=$VerifyProfile}|ConvertTo-Json -Depth 5
     }catch{
-        if($changed -and $previous){$directory.PhysicalPath=$previous;$manager.CommitChanges();$null=$pool.Recycle()}
+        if($changed -and $previous -and $isAdmin){$directory.PhysicalPath=$previous;$manager.CommitChanges();$null=$pool.Recycle()}
         throw
-    }finally{$manager.Dispose()}
+    }finally{if($manager){$manager.Dispose()}}
     }finally{$publication.Dispose()}
     return
 }
